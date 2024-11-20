@@ -37,7 +37,7 @@ func NewCaulker(opts Options) *Caulker {
 
 func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 	targets := make([]Target, 0)
-	updates := make([]Update, 0)
+	shrinks := make([]Shrink, 0)
 
 	// todo: only supports single file packages
 	for _, path := range pkg.GoFiles {
@@ -82,25 +82,23 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 				continue
 			}
 
-			newUpdates := updatesFromFunc(decl)
-			updates = append(updates, newUpdates...)
+			newUpdates := shrinksFromFunc(decl)
+			shrinks = append(shrinks, newUpdates...)
 		}
 	}
 
 	fmt.Printf("=== [Caulker.Check] 000 '%+v' ===\n", targets)
-	fmt.Printf("=== [Caulker.Check] 001 '%+v' ===\n", updates)
+	fmt.Printf("=== [Caulker.Check] 001 '%+v' ===\n", shrinks)
 
 	for _, target := range targets {
-		grows := slices.ContainsFunc(updates, func(u Update) bool {
-			return u.Kind == UpdateGrow && target.Equals(u.Target)
+		shrunk := slices.ContainsFunc(shrinks, func(u Shrink) bool {
+			return target.Equals(u.Target)
 		})
 
-		shrinks := slices.ContainsFunc(updates, func(u Update) bool {
-			return u.Kind == UpdateShrink && target.Equals(u.Target)
-		})
-
-		_ = grows
-		_ = shrinks
+		fmt.Printf("=== [Caulker.Check] 002 '%+v' ===\n", shrunk)
+		if !shrunk {
+			fmt.Printf("=== [Caulker.Check] 003 '%+v' ===\n", target)
+		}
 	}
 
 	return nil, nil
@@ -122,8 +120,8 @@ func findGrowableFields(t *ast.StructType) []*ast.Field {
 }
 
 // todo: probably should rename Growth to something more generic
-func updatesFromFunc(f *ast.FuncDecl) []Update {
-	updates := make([]Update, 0)
+func shrinksFromFunc(f *ast.FuncDecl) []Shrink {
+	shrinks := make([]Shrink, 0)
 
 	var recv *ast.Field
 
@@ -132,55 +130,36 @@ func updatesFromFunc(f *ast.FuncDecl) []Update {
 	}
 
 	for _, stmt := range f.Body.List {
-		switch update := updateFromStmt(recv, stmt); update.Kind {
-		case UpdateGrow, UpdateShrink:
-			updates = append(updates, update)
-		case UpdateUnknown:
-			// do nothing
-		}
+		shrink := shrinkFromStmt(recv, stmt)
+		shrinks = append(shrinks, shrink)
 	}
 
-	return updates
+	return shrinks
 }
 
-func updateFromStmt(recv *ast.Field, stmt ast.Stmt) Update {
+func shrinkFromStmt(recv *ast.Field, stmt ast.Stmt) Shrink {
 	switch stmt := stmt.(type) {
 	case *ast.AssignStmt:
 		// todo: currently only supports single assignments
 		if len(stmt.Lhs) != 1 {
-			return Update{}
+			return Shrink{}
 		}
 
 		switch lhs := stmt.Lhs[0].(type) {
 		case *ast.SelectorExpr:
-			return Update{
+			return Shrink{
 				Target: Target{
 					Identity: recv.Type.(*ast.StarExpr).X.(*ast.IndexExpr).X.(*ast.Ident),
 					Field: &ast.Field{
 						Names: []*ast.Ident{lhs.Sel},
 					},
 				},
-				Kind: updateKindFromExpr(stmt.Rhs[0]),
-				Pos:  stmt.TokPos,
+				Pos: stmt.TokPos,
 			}
 		}
 	}
 
-	return Update{}
-}
-
-func updateKindFromExpr(expr ast.Expr) UpdateKind {
-	switch expr := expr.(type) {
-	case *ast.CallExpr:
-		switch expr.Fun.(*ast.Ident).Name {
-		case "append", "Grow":
-			return UpdateGrow
-		}
-	case *ast.IndexExpr:
-		// todo: not sure if we can determine this or nots
-	}
-
-	return UpdateUnknown
+	return Shrink{}
 }
 
 func splitDeclarations(decls []ast.Decl) (bad []*ast.BadDecl, gen []*ast.GenDecl, funcs []*ast.FuncDecl) {

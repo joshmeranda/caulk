@@ -5,14 +5,6 @@ import (
 	"go/token"
 )
 
-type UpdateKind int
-
-const (
-	UpdateUnknown UpdateKind = iota
-	UpdateGrow
-	UpdateShrink
-)
-
 // Target points to a growable resource, such as a struct field or a global variable.
 type Target struct {
 	// Identity is the identifier for the target.
@@ -39,9 +31,8 @@ func (t Target) Equals(ot Target) bool {
 	return t.Field.Names[0].Name == ot.Field.Names[0].Name
 }
 
-type Update struct {
+type Shrink struct {
 	Target
 
-	Kind UpdateKind
-	Pos  token.Pos
+	Pos token.Pos
 }
