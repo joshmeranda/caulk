@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io"
 	"log/slog"
+	"slices"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -35,6 +36,10 @@ func NewCaulker(opts Options) *Caulker {
 }
 
 func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
+	targets := make([]Target, 0)
+	updates := make([]Update, 0)
+
+	// todo: only supports single file packages
 	for _, path := range pkg.GoFiles {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
@@ -55,7 +60,13 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 
 				switch t := spec.Type.(type) {
 				case *ast.StructType:
-					_ = findGrowableFields(t)
+					fields := findGrowableFields(t)
+					for _, f := range fields {
+						targets = append(targets, Target{
+							Identity: spec.Name,
+							Field:    f,
+						})
+					}
 				case *ast.Ident:
 					panic("non-struct types not yet supported")
 				}
@@ -71,8 +82,25 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 				continue
 			}
 
-			_, _ = growthsAndShrinksFromFunc(decl)
+			newUpdates := updatesFromFunc(decl)
+			updates = append(updates, newUpdates...)
 		}
+	}
+
+	fmt.Printf("=== [Caulker.Check] 000 '%+v' ===\n", targets)
+	fmt.Printf("=== [Caulker.Check] 001 '%+v' ===\n", updates)
+
+	for _, target := range targets {
+		grows := slices.ContainsFunc(updates, func(u Update) bool {
+			return u.Kind == UpdateGrow && target.Equals(u.Target)
+		})
+
+		shrinks := slices.ContainsFunc(updates, func(u Update) bool {
+			return u.Kind == UpdateShrink && target.Equals(u.Target)
+		})
+
+		_ = grows
+		_ = shrinks
 	}
 
 	return nil, nil
@@ -94,9 +122,8 @@ func findGrowableFields(t *ast.StructType) []*ast.Field {
 }
 
 // todo: probably should rename Growth to something more generic
-func growthsAndShrinksFromFunc(f *ast.FuncDecl) ([]Update, []Update) {
-	growths := make([]Update, 0)
-	shrinks := make([]Update, 0)
+func updatesFromFunc(f *ast.FuncDecl) []Update {
+	updates := make([]Update, 0)
 
 	var recv *ast.Field
 
@@ -106,16 +133,14 @@ func growthsAndShrinksFromFunc(f *ast.FuncDecl) ([]Update, []Update) {
 
 	for _, stmt := range f.Body.List {
 		switch update := updateFromStmt(recv, stmt); update.Kind {
-		case UpdateGrow:
-			growths = append(growths, update)
-		case UpdateShrink:
-			shrinks = append(shrinks, update)
+		case UpdateGrow, UpdateShrink:
+			updates = append(updates, update)
 		case UpdateUnknown:
 			// do nothing
 		}
 	}
 
-	return growths, shrinks
+	return updates
 }
 
 func updateFromStmt(recv *ast.Field, stmt ast.Stmt) Update {

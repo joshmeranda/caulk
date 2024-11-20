@@ -22,6 +22,23 @@ type Target struct {
 	Field *ast.Field
 }
 
+// Equals checks if the two targets point to the same resource or resoruce field. Since Targets do not specify a package, this method is not safe to use when comparing targets from different packages.
+func (t Target) Equals(ot Target) bool {
+	if t.Identity.Name != ot.Identity.Name {
+		return false
+	}
+
+	if t.Field == nil && ot.Field == nil {
+		return true
+	}
+
+	if t.Field == nil || ot.Field == nil {
+		return false
+	}
+
+	return t.Field.Names[0].Name == ot.Field.Names[0].Name
+}
+
 type Update struct {
 	Target
 
