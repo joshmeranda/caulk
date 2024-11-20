@@ -20,11 +20,6 @@ type Options struct {
 
 type Result struct{}
 
-type Growth map[string]struct {
-	GrownAtLines    []int
-	ShrinkedAtLines []int
-}
-
 type Caulker struct {
 	Options
 }
@@ -48,8 +43,9 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 		}
 
 		// we don't care about bad declarations for parsing purposes
-		_, genDecl, _ := splitDeclarations(file.Decls)
-		for _, decl := range genDecl {
+		_, genDecls, funcDecls := splitDeclarations(file.Decls)
+
+		for _, decl := range genDecls {
 			switch decl.Tok {
 			case token.TYPE:
 				spec, ok := decl.Specs[0].(*ast.TypeSpec)
@@ -59,8 +55,7 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 
 				switch t := spec.Type.(type) {
 				case *ast.StructType:
-					growableFields := findGrowableFields(t)
-					fmt.Printf("growable fields: %v\n", growableFields)
+					_ = findGrowableFields(t)
 				case *ast.Ident:
 					panic("non-struct types not yet supported")
 				}
@@ -69,6 +64,14 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 			default:
 				continue
 			}
+		}
+
+		for _, decl := range funcDecls {
+			if decl.Recv == nil {
+				continue
+			}
+
+			_, _ = growthsAndShrinksFromFunc(decl)
 		}
 	}
 
@@ -88,6 +91,71 @@ func findGrowableFields(t *ast.StructType) []*ast.Field {
 	}
 
 	return fields
+}
+
+// todo: probably should rename Growth to something more generic
+func growthsAndShrinksFromFunc(f *ast.FuncDecl) ([]Update, []Update) {
+	growths := make([]Update, 0)
+	shrinks := make([]Update, 0)
+
+	var recv *ast.Field
+
+	if f.Recv != nil {
+		recv = f.Recv.List[0]
+	}
+
+	for _, stmt := range f.Body.List {
+		switch update := updateFromStmt(recv, stmt); update.Kind {
+		case UpdateGrow:
+			growths = append(growths, update)
+		case UpdateShrink:
+			shrinks = append(shrinks, update)
+		case UpdateUnknown:
+			// do nothing
+		}
+	}
+
+	return growths, shrinks
+}
+
+func updateFromStmt(recv *ast.Field, stmt ast.Stmt) Update {
+	switch stmt := stmt.(type) {
+	case *ast.AssignStmt:
+		// todo: currently only supports single assignments
+		if len(stmt.Lhs) != 1 {
+			return Update{}
+		}
+
+		switch lhs := stmt.Lhs[0].(type) {
+		case *ast.SelectorExpr:
+			return Update{
+				Target: Target{
+					Identity: recv.Type.(*ast.StarExpr).X.(*ast.IndexExpr).X.(*ast.Ident),
+					Field: &ast.Field{
+						Names: []*ast.Ident{lhs.Sel},
+					},
+				},
+				Kind: updateKindFromExpr(stmt.Rhs[0]),
+				Pos:  stmt.TokPos,
+			}
+		}
+	}
+
+	return Update{}
+}
+
+func updateKindFromExpr(expr ast.Expr) UpdateKind {
+	switch expr := expr.(type) {
+	case *ast.CallExpr:
+		switch expr.Fun.(*ast.Ident).Name {
+		case "append", "Grow":
+			return UpdateGrow
+		}
+	case *ast.IndexExpr:
+		// todo: not sure if we can determine this or nots
+	}
+
+	return UpdateUnknown
 }
 
 func splitDeclarations(decls []ast.Decl) (bad []*ast.BadDecl, gen []*ast.GenDecl, funcs []*ast.FuncDecl) {
