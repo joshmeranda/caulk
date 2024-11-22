@@ -36,3 +36,9 @@ type Shrink struct {
 
 	Pos token.Pos
 }
+
+type Result struct {
+	Target Target
+
+	Pos token.Position
+}

@@ -101,7 +101,7 @@ func run() error {
 		}
 
 		for _, result := range results {
-			fmt.Printf("%v\n", result)
+			fmt.Printf("Resource '%s' at %s is never shrunk\n", result.Target.Identity.Name, result.Pos)
 		}
 	}
 

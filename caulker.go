@@ -5,11 +5,20 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
+)
+
+var (
+	shrinkSliceFuncNames = []string{
+		"slices.Remove",
+		"slices.RemoveFunc",
+	}
 )
 
 type Options struct {
@@ -18,8 +27,6 @@ type Options struct {
 	CheckGoroutines bool
 	CheckSlices     bool
 }
-
-type Result struct{}
 
 type Caulker struct {
 	Options
@@ -38,6 +45,7 @@ func NewCaulker(opts Options) *Caulker {
 func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 	targets := make([]Target, 0)
 	shrinks := make([]Shrink, 0)
+	results := make([]Result, 0)
 
 	// todo: only supports single file packages
 	for _, path := range pkg.GoFiles {
@@ -85,23 +93,22 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 			newUpdates := shrinksFromFunc(decl)
 			shrinks = append(shrinks, newUpdates...)
 		}
-	}
 
-	fmt.Printf("=== [Caulker.Check] 000 '%+v' ===\n", targets)
-	fmt.Printf("=== [Caulker.Check] 001 '%+v' ===\n", shrinks)
+		for _, target := range targets {
+			shrunk := slices.ContainsFunc(shrinks, func(u Shrink) bool {
+				return target.Equals(u.Target)
+			})
 
-	for _, target := range targets {
-		shrunk := slices.ContainsFunc(shrinks, func(u Shrink) bool {
-			return target.Equals(u.Target)
-		})
-
-		fmt.Printf("=== [Caulker.Check] 002 '%+v' ===\n", shrunk)
-		if !shrunk {
-			fmt.Printf("=== [Caulker.Check] 003 '%+v' ===\n", target)
+			if !shrunk {
+				results = append(results, Result{
+					Target: target,
+					Pos:    fset.Position(target.Identity.Pos()),
+				})
+			}
 		}
 	}
 
-	return nil, nil
+	return results, nil
 }
 
 func findGrowableFields(t *ast.StructType) []*ast.Field {
@@ -130,36 +137,51 @@ func shrinksFromFunc(f *ast.FuncDecl) []Shrink {
 	}
 
 	for _, stmt := range f.Body.List {
-		shrink := shrinkFromStmt(recv, stmt)
-		shrinks = append(shrinks, shrink)
+		if shrink, ok := shrinkFromStmt(recv, stmt); ok {
+			shrinks = append(shrinks, shrink)
+		}
 	}
 
 	return shrinks
 }
 
-func shrinkFromStmt(recv *ast.Field, stmt ast.Stmt) Shrink {
+func shrinkFromStmt(recv *ast.Field, stmt ast.Stmt) (Shrink, bool) {
 	switch stmt := stmt.(type) {
 	case *ast.AssignStmt:
 		// todo: currently only supports single assignments
 		if len(stmt.Lhs) != 1 {
-			return Shrink{}
+			return Shrink{}, false
 		}
+
+		var target Target
 
 		switch lhs := stmt.Lhs[0].(type) {
 		case *ast.SelectorExpr:
-			return Shrink{
-				Target: Target{
-					Identity: recv.Type.(*ast.StarExpr).X.(*ast.IndexExpr).X.(*ast.Ident),
-					Field: &ast.Field{
-						Names: []*ast.Ident{lhs.Sel},
-					},
+			target = Target{
+				Identity: recv.Type.(*ast.StarExpr).X.(*ast.IndexExpr).X.(*ast.Ident),
+				Field: &ast.Field{
+					Names: []*ast.Ident{lhs.Sel},
 				},
-				Pos: stmt.TokPos,
+			}
+
+			switch rhs := stmt.Rhs[0].(type) {
+			case *ast.CallExpr:
+				funcName := types.ExprString(rhs)
+				isShrinkFunc := slices.ContainsFunc(shrinkSliceFuncNames, func(name string) bool {
+					return strings.HasPrefix(funcName, name)
+				})
+
+				if isShrinkFunc {
+					return Shrink{
+						Target: target,
+						Pos:    stmt.Pos(),
+					}, true
+				}
 			}
 		}
 	}
 
-	return Shrink{}
+	return Shrink{}, false
 }
 
 func splitDeclarations(decls []ast.Decl) (bad []*ast.BadDecl, gen []*ast.GenDecl, funcs []*ast.FuncDecl) {
