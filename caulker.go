@@ -102,7 +102,7 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 			if !shrunk {
 				results = append(results, Result{
 					Target: target,
-					Pos:    fset.Position(target.Identity.Pos()),
+					Pos:    target.Position(fset),
 				})
 			}
 		}

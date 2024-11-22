@@ -31,6 +31,22 @@ func (t Target) Equals(ot Target) bool {
 	return t.Field.Names[0].Name == ot.Field.Names[0].Name
 }
 
+func (t Target) String() string {
+	if t.Field == nil {
+		return t.Identity.Name
+	}
+
+	return t.Identity.Name + "." + t.Field.Names[0].Name
+}
+
+func (t Target) Position(fset *token.FileSet) token.Position {
+	if t.Field == nil {
+		return fset.Position(t.Identity.Pos())
+	}
+
+	return fset.Position(t.Field.Pos())
+}
+
 type Shrink struct {
 	Target
 
