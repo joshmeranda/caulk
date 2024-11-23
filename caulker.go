@@ -53,7 +53,10 @@ func NewCaulker(opts Options) *Caulker {
 }
 
 func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
-	targets := make([]Target, 0)
+	ctx := Context{
+		Targets: make(map[string]Target),
+	}
+
 	updates := make([]Update, 0)
 	results := make([]Result, 0)
 
@@ -80,7 +83,7 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 				case *ast.StructType:
 					fields := findGrowableFields(t)
 					for _, f := range fields {
-						targets = append(targets, Target{
+						ctx.AddTarget(Target{
 							Identity: spec.Name,
 							Field:    f,
 						})
@@ -100,11 +103,11 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 				continue
 			}
 
-			newUpdates := updatesFromFunc(decl)
+			newUpdates := updatesFromFunc(ctx, decl)
 			updates = append(updates, newUpdates...)
 		}
 
-		for _, target := range targets {
+		for _, target := range ctx.Targets {
 			shrunk := slices.ContainsFunc(updates, func(u Update) bool {
 				return u.Kind == UpdateShrink && target.Equals(u.Target)
 			})
@@ -141,7 +144,7 @@ func findGrowableFields(t *ast.StructType) []*ast.Field {
 }
 
 // todo: probably should rename Growth to something more generic
-func updatesFromFunc(f *ast.FuncDecl) []Update {
+func updatesFromFunc(ctx Context, f *ast.FuncDecl) []Update {
 	updates := make([]Update, 0)
 
 	var recv *ast.Field
@@ -151,7 +154,12 @@ func updatesFromFunc(f *ast.FuncDecl) []Update {
 	}
 
 	for _, stmt := range f.Body.List {
-		if update, ok := updateFromStmt(recv, stmt); ok {
+		newCtx := Context{
+			Parent:  &ctx,
+			Targets: ctx.Targets,
+			Recv:    recv,
+		}
+		if update, ok := updateFromStmt(newCtx, stmt); ok {
 			updates = append(updates, update)
 		}
 	}
@@ -159,7 +167,7 @@ func updatesFromFunc(f *ast.FuncDecl) []Update {
 	return updates
 }
 
-func updateFromStmt(recv *ast.Field, stmt ast.Stmt) (Update, bool) {
+func updateFromStmt(ctx Context, stmt ast.Stmt) (Update, bool) {
 	switch stmt := stmt.(type) {
 	case *ast.AssignStmt:
 		// todo: currently only supports single assignments
@@ -172,7 +180,7 @@ func updateFromStmt(recv *ast.Field, stmt ast.Stmt) (Update, bool) {
 		switch lhs := stmt.Lhs[0].(type) {
 		case *ast.SelectorExpr:
 			target = Target{
-				Identity: recv.Type.(*ast.StarExpr).X.(*ast.IndexExpr).X.(*ast.Ident),
+				Identity: ctx.Recv.Type.(*ast.StarExpr).X.(*ast.IndexExpr).X.(*ast.Ident),
 				Field: &ast.Field{
 					Names: []*ast.Ident{lhs.Sel},
 				},

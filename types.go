@@ -68,3 +68,17 @@ type Result struct {
 
 	Pos token.Position
 }
+
+type Context struct {
+	Parent *Context
+
+	Targets map[string]Target
+
+	Recv *ast.Field
+}
+
+func (c *Context) AddTarget(t Target) *Context {
+	c.Targets[t.String()] = t
+
+	return c
+}
