@@ -16,8 +16,18 @@ import (
 
 var (
 	shrinkSliceFuncNames = []string{
-		"slices.Remove",
-		"slices.RemoveFunc",
+		"slices.Clip",
+		"slices.Delete",
+		"slices.DeleteFunc",
+	}
+
+	growSliceFuncNames = []string{
+		"append",
+
+		"slices.AppendSeq",
+		"slices.Grow",
+		"slices.Insert",
+		"slices.Repeat",
 	}
 )
 
@@ -44,7 +54,7 @@ func NewCaulker(opts Options) *Caulker {
 
 func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 	targets := make([]Target, 0)
-	shrinks := make([]Shrink, 0)
+	updates := make([]Update, 0)
 	results := make([]Result, 0)
 
 	// todo: only supports single file packages
@@ -90,16 +100,20 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 				continue
 			}
 
-			newUpdates := shrinksFromFunc(decl)
-			shrinks = append(shrinks, newUpdates...)
+			newUpdates := updatesFromFunc(decl)
+			updates = append(updates, newUpdates...)
 		}
 
 		for _, target := range targets {
-			shrunk := slices.ContainsFunc(shrinks, func(u Shrink) bool {
-				return target.Equals(u.Target)
+			shrunk := slices.ContainsFunc(updates, func(u Update) bool {
+				return u.Kind == UpdateShrink && target.Equals(u.Target)
 			})
 
-			if !shrunk {
+			grown := slices.ContainsFunc(updates, func(u Update) bool {
+				return u.Kind == UpdateGrow && target.Equals(u.Target)
+			})
+
+			if grown && !shrunk {
 				results = append(results, Result{
 					Target: target,
 					Pos:    target.Position(fset),
@@ -127,8 +141,8 @@ func findGrowableFields(t *ast.StructType) []*ast.Field {
 }
 
 // todo: probably should rename Growth to something more generic
-func shrinksFromFunc(f *ast.FuncDecl) []Shrink {
-	shrinks := make([]Shrink, 0)
+func updatesFromFunc(f *ast.FuncDecl) []Update {
+	updates := make([]Update, 0)
 
 	var recv *ast.Field
 
@@ -137,20 +151,20 @@ func shrinksFromFunc(f *ast.FuncDecl) []Shrink {
 	}
 
 	for _, stmt := range f.Body.List {
-		if shrink, ok := shrinkFromStmt(recv, stmt); ok {
-			shrinks = append(shrinks, shrink)
+		if update, ok := updateFromStmt(recv, stmt); ok {
+			updates = append(updates, update)
 		}
 	}
 
-	return shrinks
+	return updates
 }
 
-func shrinkFromStmt(recv *ast.Field, stmt ast.Stmt) (Shrink, bool) {
+func updateFromStmt(recv *ast.Field, stmt ast.Stmt) (Update, bool) {
 	switch stmt := stmt.(type) {
 	case *ast.AssignStmt:
 		// todo: currently only supports single assignments
 		if len(stmt.Lhs) != 1 {
-			return Shrink{}, false
+			return Update{}, false
 		}
 
 		var target Target
@@ -170,18 +184,30 @@ func shrinkFromStmt(recv *ast.Field, stmt ast.Stmt) (Shrink, bool) {
 				isShrinkFunc := slices.ContainsFunc(shrinkSliceFuncNames, func(name string) bool {
 					return strings.HasPrefix(funcName, name)
 				})
+				isGrowFunc := slices.ContainsFunc(growSliceFuncNames, func(name string) bool {
+					return strings.HasPrefix(funcName, name)
+				})
 
-				if isShrinkFunc {
-					return Shrink{
-						Target: target,
-						Pos:    stmt.Pos(),
-					}, true
+				var kind UpdateKind
+				switch {
+				case !isShrinkFunc && !isGrowFunc:
+					return Update{}, false
+				case isShrinkFunc:
+					kind = UpdateShrink
+				case isGrowFunc:
+					kind = UpdateGrow
 				}
+
+				return Update{
+					Target: target,
+					Kind:   kind,
+					Pos:    stmt.Pos(),
+				}, true
 			}
 		}
 	}
 
-	return Shrink{}, false
+	return Update{}, false
 }
 
 func splitDeclarations(decls []ast.Decl) (bad []*ast.BadDecl, gen []*ast.GenDecl, funcs []*ast.FuncDecl) {

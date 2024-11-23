@@ -11,7 +11,7 @@ func (s *Store[T]) Add(a T) {
 }
 
 func (s *Store[T]) Remove(a T) {
-	slices.DeleteFunc(s.data, func(v T) bool {
+	s.data = slices.DeleteFunc(s.data, func(v T) bool {
 		return v == a
 	})
 }

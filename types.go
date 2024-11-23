@@ -47,8 +47,18 @@ func (t Target) Position(fset *token.FileSet) token.Position {
 	return fset.Position(t.Field.Pos())
 }
 
-type Shrink struct {
+type UpdateKind int
+
+const (
+	UpdateUnknown UpdateKind = iota
+	UpdateGrow
+	UpdateShrink
+)
+
+type Update struct {
 	Target
+
+	Kind UpdateKind
 
 	Pos token.Pos
 }
