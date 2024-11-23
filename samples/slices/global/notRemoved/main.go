@@ -1,7 +1,5 @@
 package notRemoved
 
-import "slices"
-
 var Data []string
 
 func Init() {
@@ -11,7 +9,4 @@ func Init() {
 }
 
 func Remove(s string) {
-	Data = slices.DeleteFunc(Data, func(v string) bool {
-		return v == s
-	})
 }

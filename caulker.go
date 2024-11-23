@@ -92,17 +92,23 @@ func (c *Caulker) Check(pkg *packages.Package) ([]Result, error) {
 					panic("non-struct types not yet supported")
 				}
 			case token.VAR:
-				panic("growable vars are not yet supported")
+				spec, ok := decl.Specs[0].(*ast.ValueSpec)
+				if !ok {
+					panic(fmt.Sprintf("bug: expected *ast.ValueSpec but found %T", decl.Specs[0]))
+				}
+
+				switch spec.Type.(type) {
+				case *ast.ArrayType:
+					ctx.AddTarget(Target{
+						Identity: spec.Names[0],
+					})
+				}
 			default:
 				continue
 			}
 		}
 
 		for _, decl := range funcDecls {
-			if decl.Recv == nil {
-				continue
-			}
-
 			newUpdates := updatesFromFunc(ctx, decl)
 			updates = append(updates, newUpdates...)
 		}
@@ -153,12 +159,13 @@ func updatesFromFunc(ctx Context, f *ast.FuncDecl) []Update {
 		recv = f.Recv.List[0]
 	}
 
+	newCtx := Context{
+		Parent:  &ctx,
+		Targets: ctx.Targets,
+		Recv:    recv,
+	}
+
 	for _, stmt := range f.Body.List {
-		newCtx := Context{
-			Parent:  &ctx,
-			Targets: ctx.Targets,
-			Recv:    recv,
-		}
 		if update, ok := updateFromStmt(newCtx, stmt); ok {
 			updates = append(updates, update)
 		}
@@ -179,39 +186,44 @@ func updateFromStmt(ctx Context, stmt ast.Stmt) (Update, bool) {
 
 		switch lhs := stmt.Lhs[0].(type) {
 		case *ast.SelectorExpr:
+			// todo: assumes everything is pointing to the method receiver
 			target = Target{
 				Identity: ctx.Recv.Type.(*ast.StarExpr).X.(*ast.IndexExpr).X.(*ast.Ident),
 				Field: &ast.Field{
 					Names: []*ast.Ident{lhs.Sel},
 				},
 			}
-
-			switch rhs := stmt.Rhs[0].(type) {
-			case *ast.CallExpr:
-				funcName := types.ExprString(rhs)
-				isShrinkFunc := slices.ContainsFunc(shrinkSliceFuncNames, func(name string) bool {
-					return strings.HasPrefix(funcName, name)
-				})
-				isGrowFunc := slices.ContainsFunc(growSliceFuncNames, func(name string) bool {
-					return strings.HasPrefix(funcName, name)
-				})
-
-				var kind UpdateKind
-				switch {
-				case !isShrinkFunc && !isGrowFunc:
-					return Update{}, false
-				case isShrinkFunc:
-					kind = UpdateShrink
-				case isGrowFunc:
-					kind = UpdateGrow
-				}
-
-				return Update{
-					Target: target,
-					Kind:   kind,
-					Pos:    stmt.Pos(),
-				}, true
+		case *ast.Ident:
+			target = Target{
+				Identity: lhs,
 			}
+		}
+
+		switch rhs := stmt.Rhs[0].(type) {
+		case *ast.CallExpr:
+			funcName := types.ExprString(rhs)
+			isShrinkFunc := slices.ContainsFunc(shrinkSliceFuncNames, func(name string) bool {
+				return strings.HasPrefix(funcName, name)
+			})
+			isGrowFunc := slices.ContainsFunc(growSliceFuncNames, func(name string) bool {
+				return strings.HasPrefix(funcName, name)
+			})
+
+			var kind UpdateKind
+			switch {
+			case !isShrinkFunc && !isGrowFunc:
+				return Update{}, false
+			case isShrinkFunc:
+				kind = UpdateShrink
+			case isGrowFunc:
+				kind = UpdateGrow
+			}
+
+			return Update{
+				Target: target,
+				Kind:   kind,
+				Pos:    stmt.Pos(),
+			}, true
 		}
 	}
 
